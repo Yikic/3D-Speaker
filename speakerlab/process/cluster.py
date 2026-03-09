@@ -11,13 +11,13 @@ import fastcluster
 from scipy.cluster.hierarchy import fcluster
 from scipy.spatial.distance import squareform
 
-try:
-    import umap, hdbscan
-except ImportError:
-    raise ImportError(
-        "Package \"umap\" or \"hdbscan\" not found. \
-        Please install them first by \"pip install umap-learn hdbscan\"."
-        )
+# try:
+#     import umap, hdbscan
+# except ImportError:
+#     raise ImportError(
+#         "Package \"umap\" or \"hdbscan\" not found. \
+#         Please install them first by \"pip install umap-learn hdbscan\"."
+#         )
 
 
 class SpectralCluster:

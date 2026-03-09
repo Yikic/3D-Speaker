@@ -1,0 +1,19 @@
+aishell4:
+ - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav
+ - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav_list.txt
+ - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/TextGrid
+
+voxconverse:
+ - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/voxconverse_test_wav
+ - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/wav_list.txt
+ - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/test
+
+ami:
+ - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/ami/audios
+ - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/ami/wav_list.txt
+ - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/ami/rttm
+
+Ali_meeting:
+ - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/audio_dir
+ - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/audio_ls.txt
+ - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/rttm_dir

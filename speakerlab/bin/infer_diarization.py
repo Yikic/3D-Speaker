@@ -39,6 +39,8 @@ from modelscope.utils.constant import Tasks
 
 from pyannote.audio import Inference, Model
 
+from diarizen.pipelines.inference import DiariZenPipeline
+
 parser = argparse.ArgumentParser(description='Speaker diarization inference.')
 parser.add_argument('--wav', type=str, required=True, help='Input wavs')
 parser.add_argument('--out_dir', type=str, required=True, help='Out results dir')
@@ -120,6 +122,13 @@ def get_voice_activity_detection_model(device: torch.device=None, cache_dir:str 
             )
     return vad_pipeline
 
+def get_diarizen_segmentation_model(use_auth_token, device: torch.device=None):
+    diar_pipeline = DiariZenPipeline.from_pretrained("BUT-FIT/diarizen-wavlm-large-s80-md")
+    # return lambda x: diar_pipeline.get_segmentations(x)
+    diar_pipeline._segmentation.model.receptive_field = diar_pipeline._segmentation.model._receptive_field
+    return diar_pipeline._segmentation
+
+
 def get_segmentation_model(use_auth_token, device: torch.device=None):
     segmentation_params = {
         'segmentation':'pyannote/segmentation-3.0',
@@ -171,11 +180,12 @@ class Diarization3Dspeaker():
         self.include_overlap = include_overlap
 
         self.embedding_model, self.feature_extractor = get_speaker_embedding_model(self.device, model_cache_dir)
-        self.vad_model = get_voice_activity_detection_model(self.device, model_cache_dir)
+        # self.vad_model = get_voice_activity_detection_model(self.device, model_cache_dir)
         self.cluster = get_cluster_backend()
 
         if include_overlap:
-            self.segmentation_model = get_segmentation_model(hf_access_token, self.device)
+            # self.segmentation_model = get_segmentation_model(hf_access_token, self.device)
+            self.segmentation_model = get_diarizen_segmentation_model(hf_access_token, self.device)
         
         self.batchsize = 64
         self.fs = self.feature_extractor.sample_rate
@@ -186,12 +196,12 @@ class Diarization3Dspeaker():
         wav_data = load_audio(wav, wav_fs, self.fs)
 
         # stage 1-1: do vad
-        vad_time = self.do_vad(wav_data)
+        # vad_time = self.do_vad(wav_data)
         if self.include_overlap:
             # stage 1-2: do segmentation
             segmentations, count = self.do_segmentation(wav_data)
-            valid_field = get_valid_field(count)
-            vad_time = merge_vad(vad_time, valid_field)
+            vad_time = get_valid_field(count)
+            # vad_time = merge_vad(vad_time, valid_field)
 
         # stage 2: prepare subseg
         chunks = [c for (st, ed) in vad_time for c in self.chunk(st, ed)]
@@ -444,12 +454,12 @@ def main():
     if args.include_overlap and args.hf_access_token is None:
         parser.error("--hf_access_token is required when --include_overlap is specified.")
     
-    get_speaker_embedding_model()
-    get_voice_activity_detection_model()
-    get_cluster_backend()
-    if args.include_overlap:
-        get_segmentation_model(args.hf_access_token)
-    print(f'[INFO]: Model downloaded successfully.')
+    # get_speaker_embedding_model()
+    # get_voice_activity_detection_model()
+    # get_cluster_backend()
+    # if args.include_overlap:
+    #     get_segmentation_model(args.hf_access_token)
+    # print(f'[INFO]: Model downloaded successfully.')
 
     if args.wav.endswith('.wav'):
         # input is a wav file
