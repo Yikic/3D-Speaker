@@ -35,6 +35,7 @@ class SpectralCluster:
     def __call__(self, X, **kwargs):
         pval = kwargs.get('pval', None)
         oracle_num = kwargs.get('speaker_num', None)
+        constraint_matrix = kwargs.get('constraint_matrix', None)
 
         # Similarity matrix computation
         sim_mat = self.get_sim_mat(X)
@@ -45,8 +46,15 @@ class SpectralCluster:
         # Symmetrization
         sym_prund_sim_mat = 0.5 * (prunned_sim_mat + prunned_sim_mat.T)
 
+        # Constraint propagation
+        if constraint_matrix is not None:
+            optim_constraint_matrix = self.e2cp_propagation(sym_prund_sim_mat, constraint_matrix)
+            optim_sim_mat = self.adjust_similarity_matrix(sym_prund_sim_mat, optim_constraint_matrix)
+        else:
+            optim_sim_mat = sym_prund_sim_mat
+
         # Laplacian calculation
-        laplacian = self.get_laplacian(sym_prund_sim_mat)
+        laplacian = self.get_laplacian(optim_sim_mat)
 
         # Get Spectral Embeddings
         emb, num_of_spk = self.get_spec_embs(laplacian, oracle_num)
@@ -56,9 +64,98 @@ class SpectralCluster:
 
         return labels
 
+    def e2cp_propagation(self, W, Z, alpha=0.8, method='closed_form', max_iter=100, tol=1e-6):
+        """
+        Exhaustive and Efficient Constraint Propagation (E2CP) 实现
+        
+        参数:
+        W: np.ndarray, 相似度矩阵 (N x N)
+        Z: np.ndarray, 初始约束矩阵 (N x N), +1代表Must-link, -1代表Cannot-link
+        alpha: float, 传播参数 (0 < alpha < 1)
+        method: str, 'closed_form' (直接求逆) 或 'iterative' (迭代传播)
+        max_iter: int, 迭代模式下的最大迭代次数
+        tol: float, 迭代收敛阈值
+        
+        返回:
+        F_star: np.ndarray, 传播后的约束矩阵
+        """
+        N = W.shape[0]
+        
+        # 1. 计算归一化矩阵 L_bar (论文中定义为 D^-1/2 * W * D^-1/2) [cite: 586]
+        d = np.sum(W, axis=1)
+        d_inv_sqrt = np.power(d, -0.5, where=d > 0)
+        D_inv_sqrt = np.diag(d_inv_sqrt)
+        L_bar = D_inv_sqrt @ W @ D_inv_sqrt
+        
+        I = np.eye(N)
+        
+        if method == 'closed_form':
+            # --- 方式 A: 闭式解 (Closed-form Solution) ---
+            # 公式: F* = (1-alpha)^2 * (I - alpha*L_bar)^-1 * Z * (I - alpha*L_bar)^-1 
+            inv_mat = np.linalg.inv(I - alpha * L_bar)
+            F_star = (1 - alpha)**2 * (inv_mat @ Z @ inv_mat)
+            return F_star
+
+        elif method == 'iterative':
+            # --- 方式 B: 迭代法 (Efficient Iterative Method) ---
+            # 第一步：垂直传播 (Vertical Propagation) 
+            Fv = Z.copy()
+            for i in range(max_iter):
+                Fv_next = alpha * (L_bar @ Fv) + (1 - alpha) * Z
+                if np.linalg.norm(Fv_next - Fv, ord='fro') < tol:
+                    Fv = Fv_next
+                    break
+                Fv = Fv_next
+                
+            # 第二步：水平传播 (Horizontal Propagation) 
+            Fh = Fv.copy()
+            for i in range(max_iter):
+                # 注意：水平传播是在右侧乘以 L_bar 
+                Fh_next = alpha * (Fh @ L_bar) + (1 - alpha) * Fv
+                if np.linalg.norm(Fh_next - Fh, ord='fro') < tol:
+                    Fh = Fh_next
+                    break
+                Fh = Fh_next
+                
+            return Fh
+        
+        else:
+            raise ValueError("Method must be 'closed_form' or 'iterative'")
+
+    def adjust_similarity_matrix(self, W, F_star):
+        """
+        实现论文中的公式 (13): 使用传播后的约束矩阵 F* 调整原始相似度矩阵 W
+        
+        参数:
+        W: np.ndarray, 原始归一化相似度矩阵 (N x N), 元素值在 [0, 1] 之间
+        F_star: np.ndarray, 传播后的约束矩阵 (N x N), 元素值在 [-1, 1] 之间
+        
+        返回:
+        W_tilde: np.ndarray, 调整后的新相似度矩阵
+        """
+        # 确保输入是 numpy 数组
+        W = np.asarray(W)
+        F_star = np.asarray(F_star)
+        
+        # 初始化结果矩阵
+        W_tilde = np.zeros_like(W)
+        
+        # 情况 1: f_ij >= 0 (Must-link 倾向)
+        # 公式: w_tilde = 1 - (1 - f_ij) * (1 - w_ij)
+        mask_pos = (F_star >= 0)
+        W_tilde[mask_pos] = 1 - (1 - F_star[mask_pos]) * (1 - W[mask_pos])
+        
+        # 情况 2: f_ij < 0 (Cannot-link 倾向)
+        # 公式: w_tilde = (1 + f_ij) * w_ij
+        mask_neg = (F_star < 0)
+        W_tilde[mask_neg] = (1 + F_star[mask_neg]) * W[mask_neg]
+        
+        return W_tilde
+
     def get_sim_mat(self, X):
-        # Cosine similarities
+        # Cosine similarities, normalized from [-1, 1] to [0, 1]
         M = cosine_similarity(X, X)
+        M = (M + 1) / 2
         return M
 
     def p_pruning(self, A, pval=None):

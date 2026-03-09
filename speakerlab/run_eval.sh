@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 
 CONFIG_FILE="config/dataset.yaml"
 BASE_OUT_DIR="${1:-results}"
+USE_CONSTRAINT="${2:-false}"
 
 # 读取并简单解析 YAML 文件
 dataset_name=""
@@ -40,6 +41,9 @@ process_dataset() {
         
         # Run diarization
         cmd_infer="python bin/infer_diarization.py --wav \"$tmp_wav_list\" --out_dir \"$out_dir\" --include_overlap --hf_access_token $HuggingFaceToken"
+        if [ "$USE_CONSTRAINT" = "true" ]; then
+            cmd_infer="$cmd_infer --use_constraint"
+        fi
         echo "Running inference: $cmd_infer"
         eval $cmd_infer
         
