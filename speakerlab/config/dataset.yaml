@@ -1,19 +1,19 @@
 aishell4:
- - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav
- - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav_list.txt
- - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/TextGrid
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav_list_no_overlap.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/TextGrid_no_overlap
 
 voxconverse:
- - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/voxconverse_test_wav
- - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/wav_list.txt
- - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/test
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/voxconverse_test_wav_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/wav_list_no_overlap.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/test_no_overlap
 
 ami:
- - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/ami/audios
- - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/ami/wav_list.txt
- - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/ami/rttm
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/ami/audios_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/ami/wav_list_no_overlap.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/ami/rttm_no_overlap
 
-Ali_meeting:
- - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/audio_dir
- - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/audio_ls.txt
- - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/rttm_dir
+aishell5:
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/all_audio_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/wav_list_no_overlap.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/all_rttm_no_overlap

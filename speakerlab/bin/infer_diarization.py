@@ -51,6 +51,7 @@ parser.add_argument('--diable_progress_bar', action='store_true', help='Close th
 parser.add_argument('--nprocs', default=None, type=int, help='Num of procs')
 parser.add_argument('--speaker_num', default=None, type=int, help='Oracle num of speaker')
 parser.add_argument('--use_constraint', action='store_true', help='Use pairwise constraint matrix from segmentation for clustering')
+parser.add_argument('--include_overlap_post', action='store_true', help='Include overlap post-processing to refine diarization with segmentation results')
 
 
 
@@ -168,6 +169,8 @@ class Diarization3Dspeaker():
         speaker_num (int, default=None): Specify number of speakers.
         use_constraint (bool, default=False): Whether to use pairwise constraint matrix 
             from segmentation results to guide clustering.
+        include_overlap_post (bool, default=False): Whether to perform overlap post-processing 
+            to refine diarization output using segmentation results.
         model_cache_dir (str, default=None): If specified, the pretrained model will be downloaded 
             to this directory; only pretrained from modelscope are supported.
     Usage:
@@ -176,13 +179,14 @@ class Diarization3Dspeaker():
         print(output) # output: [[1.1, 2.2, 0], [3.1, 4.1, 1], ..., [st_n, ed_n, speaker_id]]
         diarization_pipeline.save_diar_output('audio.rttm') # or audio.json
     """
-    def __init__(self, device=None, include_overlap=False, hf_access_token=None, speaker_num=None, use_constraint=False, model_cache_dir=None):
+    def __init__(self, device=None, include_overlap=False, hf_access_token=None, speaker_num=None, use_constraint=False, include_overlap_post=False, model_cache_dir=None):
         if include_overlap and hf_access_token is None:
             raise ValueError("hf_access_token is required when include_overlap is True.")
 
         self.device = self.normalize_device(device)
         self.include_overlap = include_overlap
         self.use_constraint = use_constraint
+        self.include_overlap_post = include_overlap_post
 
         self.embedding_model, self.feature_extractor = get_speaker_embedding_model(self.device, model_cache_dir)
         # self.vad_model = get_voice_activity_detection_model(self.device, model_cache_dir)
@@ -211,6 +215,9 @@ class Diarization3Dspeaker():
         # stage 2: prepare subseg
         chunks = [c for (st, ed) in vad_time for c in self.chunk(st, ed)]
 
+        if not chunks:
+            return []
+
         constraint_matrix = None
         if self.include_overlap and self.use_constraint:
             # stage 2.5: build pairwise constraint matrix from segmentation
@@ -225,7 +232,7 @@ class Diarization3Dspeaker():
         # stage 4: clustering
         speaker_num, output_field_labels = self.do_clustering(chunks, embeddings, speaker_num, constraint_matrix=constraint_matrix)
 
-        if self.include_overlap:
+        if self.include_overlap and self.include_overlap_post:
             # stage 5: include overlap results
             binary = self.post_process(output_field_labels, speaker_num, segmentations, count)
             timestamps = [count.sliding_window[i].middle for i in range(binary.shape[0])]
@@ -541,7 +548,7 @@ def main_process(rank, nprocs, args, wav_list):
     else:
         ngpus = torch.cuda.device_count()
         device = torch.device('cuda:%d'%(rank%ngpus))
-    diarization = Diarization3Dspeaker(device, args.include_overlap, args.hf_access_token, args.speaker_num, args.use_constraint)
+    diarization = Diarization3Dspeaker(device, args.include_overlap, args.hf_access_token, args.speaker_num, args.use_constraint, args.include_overlap_post)
     
     wav_list = wav_list[rank::nprocs]
     if rank == 0 and (not args.diable_progress_bar):
