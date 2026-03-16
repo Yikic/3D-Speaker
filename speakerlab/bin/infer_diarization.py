@@ -52,6 +52,7 @@ parser.add_argument('--nprocs', default=None, type=int, help='Num of procs')
 parser.add_argument('--speaker_num', default=None, type=int, help='Oracle num of speaker')
 parser.add_argument('--use_constraint', action='store_true', help='Use pairwise constraint matrix from segmentation for clustering')
 parser.add_argument('--include_overlap_post', action='store_true', help='Include overlap post-processing to refine diarization with segmentation results')
+parser.add_argument('--ref_rttm', type=str, default=None, help='Reference RTTM file(s) to build constraint matrix, separated by comma')
 
 
 
@@ -171,6 +172,7 @@ class Diarization3Dspeaker():
             from segmentation results to guide clustering.
         include_overlap_post (bool, default=False): Whether to perform overlap post-processing 
             to refine diarization output using segmentation results.
+        ref_rttm (str, default=None): Reference RTTM file to build constraint matrix.
         model_cache_dir (str, default=None): If specified, the pretrained model will be downloaded 
             to this directory; only pretrained from modelscope are supported.
     Usage:
@@ -179,7 +181,7 @@ class Diarization3Dspeaker():
         print(output) # output: [[1.1, 2.2, 0], [3.1, 4.1, 1], ..., [st_n, ed_n, speaker_id]]
         diarization_pipeline.save_diar_output('audio.rttm') # or audio.json
     """
-    def __init__(self, device=None, include_overlap=False, hf_access_token=None, speaker_num=None, use_constraint=False, include_overlap_post=False, model_cache_dir=None):
+    def __init__(self, device=None, include_overlap=False, hf_access_token=None, speaker_num=None, use_constraint=False, include_overlap_post=False, ref_rttm=None, model_cache_dir=None):
         if include_overlap and hf_access_token is None:
             raise ValueError("hf_access_token is required when include_overlap is True.")
 
@@ -187,6 +189,10 @@ class Diarization3Dspeaker():
         self.include_overlap = include_overlap
         self.use_constraint = use_constraint
         self.include_overlap_post = include_overlap_post
+
+        self.rttm_data = None
+        if ref_rttm is not None:
+            self.rttm_data = self.load_rttm(ref_rttm)
 
         self.embedding_model, self.feature_extractor = get_speaker_embedding_model(self.device, model_cache_dir)
         # self.vad_model = get_voice_activity_detection_model(self.device, model_cache_dir)
@@ -224,7 +230,9 @@ class Diarization3Dspeaker():
             # constraint_matrix[i,j] = 1 means chunk i and j are same speaker
             # constraint_matrix[i,j] = -1 means chunk i and j are different speakers
             # constraint_matrix[i,j] = 0 means no constraint (unknown or conflicting)
-            constraint_matrix = self.build_pairwise_constraint_matrix(chunks, segmentations)
+            wav_id = os.path.basename(wav).rsplit('.', 1)[0] if isinstance(wav, str) else 'default'
+            ref_segs = self.rttm_data.get(wav_id, []) if self.rttm_data else None
+            constraint_matrix = self.build_pairwise_constraint_matrix(chunks, segmentations, ref_segs)
 
         # stage 3: extract embeddings
         embeddings = self.do_emb_extraction(chunks, wav_data)
@@ -261,7 +269,37 @@ class Diarization3Dspeaker():
         count.data = np.rint(count.data).astype(np.uint8)
         return segmentations, count
 
-    def build_pairwise_constraint_matrix(self, chunks, segmentations):
+    def load_rttm(self, rttm_path):
+        rttm_data = {}
+        for r_path in rttm_path.split(','):
+            r_path = r_path.strip()
+            if not r_path:
+                continue
+            with open(r_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 8:
+                        wav_id = parts[1]
+                        st = float(parts[3])
+                        ed = st + float(parts[4])
+                        spk = parts[7]
+                        if wav_id not in rttm_data:
+                            rttm_data[wav_id] = []
+                        rttm_data[wav_id].append({'start': st, 'end': ed, 'speaker': spk})
+        return rttm_data
+
+    def get_chunk_ref_speaker(self, chunk, ref_segs):
+        c_st, c_ed = chunk
+        max_overlap = 0
+        best_spk = None
+        for seg in ref_segs:
+            overlap = max(0, min(c_ed, seg['end']) - max(c_st, seg['start']))
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_spk = seg['speaker']
+        return best_spk
+
+    def build_pairwise_constraint_matrix(self, chunks, segmentations, ref_segs=None):
         """Build a pairwise constraint matrix from segmentation results.
 
         For each segmentation window, determine which chunks overlap with it.
@@ -270,9 +308,14 @@ class Diarization3Dspeaker():
         If different segmentation windows give conflicting results for the same
         chunk pair, reset to 0 (no constraint).
 
+        If ref_segs is provided, the constraints are built using the true speakers
+        from the reference RTTM rather than the segmentation posteriors, but still
+        restricted to pairs of chunks that fall within the same segmentation window.
+
         Args:
             chunks: list of [st, ed], length n
             segmentations: SlidingWindowFeature, shape (num_windows, num_frames_per_chunk, num_classes)
+            ref_segs: list of dicts with keys 'start', 'end', 'speaker'
 
         Returns:
             constraint_matrix: np.ndarray of shape (n, n), values in {-1, 0, 1}
@@ -286,6 +329,13 @@ class Diarization3Dspeaker():
         seg_window = segmentations.sliding_window
         num_windows, num_frames_per_chunk, num_classes = segmentations.data.shape
         frame_duration = seg_window.duration / num_frames_per_chunk
+
+        chunk_ref_speakers = {}
+        if ref_segs is not None:
+            for i, chunk in enumerate(chunks):
+                spk = self.get_chunk_ref_speaker(chunk, ref_segs)
+                if spk is not None:
+                    chunk_ref_speakers[i] = spk
 
         for win_idx, (seg_chunk, data) in enumerate(segmentations):
             # seg_chunk: Segment with .start, .end
@@ -305,52 +355,76 @@ class Diarization3Dspeaker():
             if len(overlapping) < 2:
                 continue
 
-            # For each overlapping chunk, determine its dominant local speaker class
-            # by summing activations over the frames that overlap with the chunk
-            chunk_dominant_class = {}
-            for chunk_idx in overlapping:
-                c_st, c_ed = chunks[chunk_idx]
-                # Compute the frame range within this segmentation window
-                # that corresponds to the chunk
-                overlap_st = max(win_start, c_st)
-                overlap_ed = min(win_end, c_ed)
-                frame_st = int((overlap_st - win_start) / frame_duration)
-                frame_ed = int((overlap_ed - win_start) / frame_duration)
-                frame_st = max(0, min(frame_st, num_frames_per_chunk))
-                frame_ed = max(0, min(frame_ed, num_frames_per_chunk))
-                if frame_st >= frame_ed:
-                    continue
+            if ref_segs is not None:
+                # Use true speakers from reference RTTM
+                determined_chunks = [c for c in overlapping if c in chunk_ref_speakers]
+                for ii in range(len(determined_chunks)):
+                    for jj in range(ii + 1, len(determined_chunks)):
+                        ci = determined_chunks[ii]
+                        cj = determined_chunks[jj]
+                        if chunk_ref_speakers[ci] == chunk_ref_speakers[cj]:
+                            relation = 1
+                        else:
+                            relation = -1
 
-                # Sum activation per class over the overlapping frames
-                class_activations = data[frame_st:frame_ed, :].sum(axis=0)  # [num_classes]
-                dominant_class = int(np.argmax(class_activations))
-                # Only assign if the dominant class has non-zero activation
-                if class_activations[dominant_class] > 0:
-                    chunk_dominant_class[chunk_idx] = dominant_class
+                        if assigned[ci, cj] == 0:
+                            # First time assigning this pair
+                            constraint_matrix[ci, cj] = relation
+                            constraint_matrix[cj, ci] = relation
+                            assigned[ci, cj] = 1
+                            assigned[cj, ci] = 1
+                        else:
+                            # Already assigned: if conflicting, reset to 0
+                            if constraint_matrix[ci, cj] != relation:
+                                constraint_matrix[ci, cj] = 0
+                                constraint_matrix[cj, ci] = 0
+            else:
+                # For each overlapping chunk, determine its dominant local speaker class
+                # by summing activations over the frames that overlap with the chunk
+                chunk_dominant_class = {}
+                for chunk_idx in overlapping:
+                    c_st, c_ed = chunks[chunk_idx]
+                    # Compute the frame range within this segmentation window
+                    # that corresponds to the chunk
+                    overlap_st = max(win_start, c_st)
+                    overlap_ed = min(win_end, c_ed)
+                    frame_st = int((overlap_st - win_start) / frame_duration)
+                    frame_ed = int((overlap_ed - win_start) / frame_duration)
+                    frame_st = max(0, min(frame_st, num_frames_per_chunk))
+                    frame_ed = max(0, min(frame_ed, num_frames_per_chunk))
+                    if frame_st >= frame_ed:
+                        continue
 
-            # For each pair of chunks that both have a dominant class,
-            # determine if they are same or different speaker
-            determined_chunks = list(chunk_dominant_class.keys())
-            for ii in range(len(determined_chunks)):
-                for jj in range(ii + 1, len(determined_chunks)):
-                    ci = determined_chunks[ii]
-                    cj = determined_chunks[jj]
-                    if chunk_dominant_class[ci] == chunk_dominant_class[cj]:
-                        relation = 1   # same speaker
-                    else:
-                        relation = -1  # different speaker
+                    # Sum activation per class over the overlapping frames
+                    class_activations = data[frame_st:frame_ed, :].sum(axis=0)  # [num_classes]
+                    dominant_class = int(np.argmax(class_activations))
+                    # Only assign if the dominant class has non-zero activation
+                    if class_activations[dominant_class] > 0:
+                        chunk_dominant_class[chunk_idx] = dominant_class
 
-                    if assigned[ci, cj] == 0:
-                        # First time assigning this pair
-                        constraint_matrix[ci, cj] = relation
-                        constraint_matrix[cj, ci] = relation
-                        assigned[ci, cj] = 1
-                        assigned[cj, ci] = 1
-                    else:
-                        # Already assigned: if conflicting, reset to 0
-                        if constraint_matrix[ci, cj] != relation:
-                            constraint_matrix[ci, cj] = 0
-                            constraint_matrix[cj, ci] = 0
+                # For each pair of chunks that both have a dominant class,
+                # determine if they are same or different speaker
+                determined_chunks = list(chunk_dominant_class.keys())
+                for ii in range(len(determined_chunks)):
+                    for jj in range(ii + 1, len(determined_chunks)):
+                        ci = determined_chunks[ii]
+                        cj = determined_chunks[jj]
+                        if chunk_dominant_class[ci] == chunk_dominant_class[cj]:
+                            relation = 1   # same speaker
+                        else:
+                            relation = -1  # different speaker
+
+                        if assigned[ci, cj] == 0:
+                            # First time assigning this pair
+                            constraint_matrix[ci, cj] = relation
+                            constraint_matrix[cj, ci] = relation
+                            assigned[ci, cj] = 1
+                            assigned[cj, ci] = 1
+                        else:
+                            # Already assigned: if conflicting, reset to 0
+                            if constraint_matrix[ci, cj] != relation:
+                                constraint_matrix[ci, cj] = 0
+                                constraint_matrix[cj, ci] = 0
 
         return constraint_matrix
 
@@ -548,7 +622,7 @@ def main_process(rank, nprocs, args, wav_list):
     else:
         ngpus = torch.cuda.device_count()
         device = torch.device('cuda:%d'%(rank%ngpus))
-    diarization = Diarization3Dspeaker(device, args.include_overlap, args.hf_access_token, args.speaker_num, args.use_constraint, args.include_overlap_post)
+    diarization = Diarization3Dspeaker(device, args.include_overlap, args.hf_access_token, args.speaker_num, args.use_constraint, args.include_overlap_post, args.ref_rttm)
     
     wav_list = wav_list[rank::nprocs]
     if rank == 0 and (not args.diable_progress_bar):

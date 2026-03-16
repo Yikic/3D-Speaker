@@ -7,6 +7,7 @@ CONFIG_FILE="config/dataset.yaml"
 BASE_OUT_DIR="${1:-results}"
 USE_CONSTRAINT="${2:-false}"
 USE_OVERLAP_POST="${3:-false}"
+USE_REF_RTTM="${4:-false}"
 
 # 读取并简单解析 YAML 文件
 dataset_name=""
@@ -44,6 +45,12 @@ process_dataset() {
         cmd_infer="python bin/infer_diarization.py --wav \"$tmp_wav_list\" --out_dir \"$out_dir\" --include_overlap --hf_access_token $HuggingFaceToken"
         if [ "$USE_CONSTRAINT" = "true" ]; then
             cmd_infer="$cmd_infer --use_constraint"
+            if [ "$USE_REF_RTTM" = "true" ] && [ -n "$ref_rttms" ] && [ -d "$ref_rttms" ] ; then
+                # Find matching rttm file. Assuming standard evaluation where ref_rttms points to a directory
+                cmd_infer="$cmd_infer --ref_rttm $(find "$ref_rttms" -name '*.rttm' | paste -sd,)"
+            elif [ "$USE_REF_RTTM" = "true" ] && [ -n "$ref_rttms" ] && [ -f "$ref_rttms" ] ; then
+                cmd_infer="$cmd_infer --ref_rttm \"$ref_rttms\""
+            fi
         fi
         if [ "$USE_OVERLAP_POST" = "true" ]; then
             cmd_infer="$cmd_infer --include_overlap_post"
