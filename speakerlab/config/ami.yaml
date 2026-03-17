@@ -1,0 +1,4 @@
+ami:
+ - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/ami/audios
+ - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/ami/wav_list.txt
+ - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/ami/rttm

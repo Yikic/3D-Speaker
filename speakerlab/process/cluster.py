@@ -36,6 +36,7 @@ class SpectralCluster:
         pval = kwargs.get('pval', None)
         oracle_num = kwargs.get('speaker_num', None)
         constraint_matrix = kwargs.get('constraint_matrix', None)
+        alpha = kwargs.get('alpha', 0.8)
 
         # Similarity matrix computation
         sim_mat = self.get_sim_mat(X)
@@ -48,7 +49,7 @@ class SpectralCluster:
 
         # Constraint propagation
         if constraint_matrix is not None:
-            optim_constraint_matrix = self.e2cp_propagation(sym_prund_sim_mat, constraint_matrix)
+            optim_constraint_matrix = self.e2cp_propagation(sym_prund_sim_mat, constraint_matrix, alpha=alpha)
             optim_sim_mat = self.adjust_similarity_matrix(sym_prund_sim_mat, optim_constraint_matrix)
         else:
             optim_sim_mat = sym_prund_sim_mat
