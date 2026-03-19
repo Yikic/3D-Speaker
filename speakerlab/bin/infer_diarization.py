@@ -56,6 +56,7 @@ parser.add_argument('--ref_rttm', type=str, default=None, help='Reference RTTM f
 parser.add_argument('--constraint_ratio', type=float, default=1.0, help='Ratio of constraints to keep in each window (0 to 1), rest are randomly masked to 0')
 parser.add_argument('--pval', type=float, default=0.012, help='pval for spectral clustering')
 parser.add_argument('--alpha', type=float, default=0.8, help='alpha parameter for e2cp constraint propagation')
+parser.add_argument('--visualize_cluster', action='store_true', help='Visualize clustering results using PCA to 2D')
 
 
 
@@ -185,7 +186,7 @@ class Diarization3Dspeaker():
         print(output) # output: [[1.1, 2.2, 0], [3.1, 4.1, 1], ..., [st_n, ed_n, speaker_id]]
         diarization_pipeline.save_diar_output('audio.rttm') # or audio.json
     """
-    def __init__(self, device=None, include_overlap=False, hf_access_token=None, speaker_num=None, use_constraint=False, include_overlap_post=False, ref_rttm=None, constraint_ratio=1.0, model_cache_dir=None, pval=0.012, alpha=0.8):
+    def __init__(self, device=None, include_overlap=False, hf_access_token=None, speaker_num=None, use_constraint=False, include_overlap_post=False, ref_rttm=None, constraint_ratio=1.0, model_cache_dir=None, pval=0.012, alpha=0.8, visualize_cluster=False, out_dir=None):
         if include_overlap and hf_access_token is None:
             raise ValueError("hf_access_token is required when include_overlap is True.")
 
@@ -195,6 +196,8 @@ class Diarization3Dspeaker():
         self.include_overlap_post = include_overlap_post
         self.constraint_ratio = constraint_ratio
         self.alpha = alpha
+        self.visualize_cluster = visualize_cluster
+        self.out_dir = out_dir
 
         self.rttm_data = None
         if ref_rttm is not None:
@@ -220,7 +223,7 @@ class Diarization3Dspeaker():
         # vad_time = self.do_vad(wav_data)
         if self.include_overlap:
             # stage 1-2: do segmentation
-            segmentations, count = self.do_segmentation(wav_data)
+            segmentations, count, segmentation_scores = self.do_segmentation(wav_data)
             vad_time = get_valid_field(count)
             # vad_time = merge_vad(vad_time, valid_field)
 
@@ -231,12 +234,13 @@ class Diarization3Dspeaker():
             return []
 
         constraint_matrix = None
+        wav_id = os.path.basename(wav).rsplit('.', 1)[0] if isinstance(wav, str) else 'default'
+        
         if self.include_overlap and self.use_constraint:
             # stage 2.5: build pairwise constraint matrix from segmentation
             # constraint_matrix[i,j] = 1 means chunk i and j are same speaker
             # constraint_matrix[i,j] = -1 means chunk i and j are different speakers
             # constraint_matrix[i,j] = 0 means no constraint (unknown or conflicting)
-            wav_id = os.path.basename(wav).rsplit('.', 1)[0] if isinstance(wav, str) else 'default'
             ref_segs = self.rttm_data.get(wav_id, []) if self.rttm_data else None
             constraint_matrix = self.build_pairwise_constraint_matrix(chunks, segmentations, ref_segs, self.constraint_ratio)
 
@@ -244,7 +248,7 @@ class Diarization3Dspeaker():
         embeddings = self.do_emb_extraction(chunks, wav_data)
 
         # stage 4: clustering
-        speaker_num, output_field_labels = self.do_clustering(chunks, embeddings, speaker_num, constraint_matrix=constraint_matrix)
+        speaker_num, output_field_labels = self.do_clustering(chunks, embeddings, speaker_num, constraint_matrix=constraint_matrix, wav_id=wav_id)
 
         if self.include_overlap and self.include_overlap_post:
             # stage 5: include overlap results
@@ -262,7 +266,8 @@ class Diarization3Dspeaker():
         return vad_time
 
     def do_segmentation(self, wav):
-        segmentations = self.segmentation_model({'waveform':wav, 'sample_rate': self.fs})
+        segmentations = self.segmentation_model({'waveform':wav, 'sample_rate': self.fs}, soft=False)
+        segmentation_scores = self.segmentation_model({'waveform':wav, 'sample_rate': self.fs}, soft=True)
         frame_windows = self.segmentation_model.model.receptive_field
 
         count = Inference.aggregate(
@@ -273,7 +278,7 @@ class Diarization3Dspeaker():
             skip_average=False,
         )
         count.data = np.rint(count.data).astype(np.uint8)
-        return segmentations, count
+        return segmentations, count, segmentation_scores
 
     def load_rttm(self, rttm_path):
         rttm_data = {}
@@ -491,13 +496,19 @@ class Diarization3Dspeaker():
         embeddings = torch.cat(embeddings, dim=0).numpy()
         return embeddings
 
-    def do_clustering(self, chunks, embeddings, speaker_num=None, constraint_matrix=None):
+    def do_clustering(self, chunks, embeddings, speaker_num=None, constraint_matrix=None, wav_id='default'):
         cluster_labels = self.cluster(
             embeddings, 
             speaker_num = speaker_num if speaker_num is not None else self.speaker_num,
             constraint_matrix = constraint_matrix,
             alpha = self.alpha
         )
+
+        if getattr(self, 'visualize_cluster', False) and hasattr(self.cluster, 'cluster') and hasattr(self.cluster.cluster, 'visualize_clusters'):
+            vis_dir = self.out_dir if getattr(self, 'out_dir', None) else '.'
+            vis_path = os.path.join(vis_dir, f"{wav_id}_pca_vis.png")
+            self.cluster.cluster.visualize_clusters(embeddings, cluster_labels, constraint_matrix=constraint_matrix, save_path=vis_path)
+
         speaker_num = cluster_labels.max()+1
         output_field_labels = [[i[0], i[1], int(j)] for i, j in zip(chunks, cluster_labels)]
         output_field_labels = compressed_seg(output_field_labels)
@@ -657,7 +668,12 @@ def main_process(rank, nprocs, args, wav_list):
     else:
         ngpus = torch.cuda.device_count()
         device = torch.device('cuda:%d'%(rank%ngpus))
-    diarization = Diarization3Dspeaker(device, args.include_overlap, args.hf_access_token, args.speaker_num, args.use_constraint, args.include_overlap_post, args.ref_rttm, args.constraint_ratio, pval=args.pval, alpha=args.alpha)
+    diarization = Diarization3Dspeaker(
+        device, args.include_overlap, args.hf_access_token, args.speaker_num, 
+        args.use_constraint, args.include_overlap_post, args.ref_rttm, 
+        args.constraint_ratio, pval=args.pval, alpha=args.alpha, 
+        visualize_cluster=args.visualize_cluster, out_dir=args.out_dir
+    )
     
     wav_list = wav_list[rank::nprocs]
     if rank == 0 and (not args.diable_progress_bar):

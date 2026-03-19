@@ -49,7 +49,10 @@ class SpectralCluster:
 
         # Constraint propagation
         if constraint_matrix is not None:
+            # self.visualize_heatmap(constraint_matrix, save_path="results/constraint_mat_before.png", title="Constraint Matrix Before Propagation")
+            # self.visualize_heatmap(sym_prund_sim_mat, save_path="results/sim_mat.png", title="Similarity Matrix After Pruning")
             optim_constraint_matrix = self.e2cp_propagation(sym_prund_sim_mat, constraint_matrix, alpha=alpha)
+            # self.visualize_heatmap(optim_constraint_matrix, save_path="results/constraint_mat_after.png", title="Constraint Matrix After Propagation")
             optim_sim_mat = self.adjust_similarity_matrix(sym_prund_sim_mat, optim_constraint_matrix)
         else:
             optim_sim_mat = sym_prund_sim_mat
@@ -201,6 +204,118 @@ class SpectralCluster:
         # k-means
         _, labels, _ = k_means(emb, k)
         return labels
+
+    def visualize_clusters(self, emb, labels, constraint_matrix=None, save_path="results/cluster_vis.png"):
+        from sklearn.decomposition import PCA
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        pca = PCA(n_components=2)
+        emb_2d = pca.fit_transform(emb)
+        
+        if constraint_matrix is None:
+            plt.figure(figsize=(8, 6))
+            scatter = plt.scatter(emb_2d[:, 0], emb_2d[:, 1], c=labels, cmap='tab20', alpha=0.7)
+            plt.colorbar(scatter, label='Speaker Label')
+            plt.title('Speaker Clustering Visualization (PCA)')
+            plt.xlabel('Principal Component 1')
+            plt.ylabel('Principal Component 2')
+            plt.savefig(save_path)
+            plt.close()
+        else:
+            import os
+            base_dir, base_name = os.path.split(save_path)
+            name, ext = os.path.splitext(base_name)
+            
+            # Helper to plot base scatter
+            def plot_base(ax_or_plt, title):
+                if hasattr(ax_or_plt, 'scatter'):
+                    scatter = ax_or_plt.scatter(emb_2d[:, 0], emb_2d[:, 1], c=labels, cmap='tab20', alpha=0.7)
+                    # ax_or_plt.set_title(title)
+                else:
+                    scatter = plt.scatter(emb_2d[:, 0], emb_2d[:, 1], c=labels, cmap='tab20', alpha=0.7)
+                    # plt.title(title)
+                return scatter
+
+            N = len(labels)
+            
+            ml_diff_class = []
+            cl_same_class = []
+            
+            ml_same_class = []
+            cl_diff_class = []
+            
+            all_ml = []
+            all_cl = []
+
+            for i in range(N):
+                for j in range(i+1, N):
+                    if constraint_matrix[i, j] > 0.5: # Consider 1 as must-link
+                        all_ml.append((i, j))
+                        if labels[i] != labels[j]:
+                            ml_diff_class.append((i, j))
+                        else:
+                            ml_same_class.append((i, j))
+                    elif constraint_matrix[i, j] < -0.5: # Consider -1 as cannot-link
+                        all_cl.append((i, j))
+                        if labels[i] == labels[j]:
+                            cl_same_class.append((i, j))
+                        else:
+                            cl_diff_class.append((i, j))
+            
+            # Plot 1: 1 ml same class, 1 cl diff class (Correct constraints)
+            plt.figure(figsize=(8, 6))
+            plot_base(plt, '1 ML (same class) & 1 CL (diff class)')
+            if ml_same_class:
+                i, j = ml_same_class[0]
+                plt.plot([emb_2d[i, 0], emb_2d[j, 0]], [emb_2d[i, 1], emb_2d[j, 1]], 'g-', lw=2, label='Must-link (Correct)')
+            if cl_diff_class:
+                i, j = cl_diff_class[0]
+                plt.plot([emb_2d[i, 0], emb_2d[j, 0]], [emb_2d[i, 1], emb_2d[j, 1]], 'r--', lw=2, label='Cannot-link (Correct)')
+            # plt.legend()
+            plt.savefig(os.path.join(base_dir, f"{name}_1_correct_examples{ext}"))
+            plt.close()
+            
+            # Plot 2: All ML (same class)
+            plt.figure(figsize=(8, 6))
+            plot_base(plt, 'All Must-links (same class)')
+            for i, j in ml_same_class:
+                plt.plot([emb_2d[i, 0], emb_2d[j, 0]], [emb_2d[i, 1], emb_2d[j, 1]], 'g-', alpha=0.3)
+            plt.savefig(os.path.join(base_dir, f"{name}_2_ml_same_class{ext}"))
+            plt.close()
+                
+            # Plot 3: All CL (diff class)
+            plt.figure(figsize=(8, 6))
+            plot_base(plt, 'All Cannot-links (diff class)')
+            for i, j in cl_diff_class:
+                plt.plot([emb_2d[i, 0], emb_2d[j, 0]], [emb_2d[i, 1], emb_2d[j, 1]], 'r--', alpha=0.3)
+            plt.savefig(os.path.join(base_dir, f"{name}_3_cl_diff_class{ext}"))
+            plt.close()
+                
+            # Plot 4: All ML and CL
+            plt.figure(figsize=(8, 6))
+            plot_base(plt, 'All Must-links and Cannot-links')
+            for i, j in all_ml:
+                plt.plot([emb_2d[i, 0], emb_2d[j, 0]], [emb_2d[i, 1], emb_2d[j, 1]], 'g-', alpha=0.1)
+            for i, j in all_cl:
+                plt.plot([emb_2d[i, 0], emb_2d[j, 0]], [emb_2d[i, 1], emb_2d[j, 1]], 'r--', alpha=0.1)
+            plt.savefig(os.path.join(base_dir, f"{name}_4_all_links{ext}"))
+            plt.close()
+
+    def visualize_heatmap(self, matrix, save_path="heatmap.png", title="Heatmap"):
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        plt.figure(figsize=(8, 6))
+        # Use a symmetric colormap centered around zero
+        vmax = max(1e-5, np.max(np.abs(matrix)))
+        plt.imshow(matrix, cmap='coolwarm', vmin=-vmax, vmax=vmax, aspect='auto')
+        plt.colorbar(label='Constraint Value')
+        plt.title(title)
+        plt.xlabel('Chunk Index')
+        plt.ylabel('Chunk Index')
+        plt.savefig(save_path)
+        plt.close()
 
     def getEigenGaps(self, eig_vals):
         eig_vals_gap_list = []

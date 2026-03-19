@@ -3,7 +3,7 @@
 # 确保在speakerlab目录下运行
 cd "$(dirname "$0")"
 
-CONFIG_FILE="config/dataset.yaml"
+CONFIG_FILE="config/aishell5.yaml"
 BASE_OUT_DIR="${1:-results}"
 USE_CONSTRAINT="${2:-false}"
 USE_OVERLAP_POST="${3:-false}"
@@ -42,7 +42,7 @@ process_dataset() {
         fi
         
         # Run diarization
-        cmd_infer="python bin/infer_diarization.py --wav \"$tmp_wav_list\" --out_dir \"$out_dir\" --include_overlap --hf_access_token $HuggingFaceToken"
+        cmd_infer="python bin/infer_diarization.py --wav \"$tmp_wav_list\" --out_dir \"$out_dir\" --include_overlap --visualize_cluster --hf_access_token $HuggingFaceToken"
         if [ "$USE_CONSTRAINT" = "true" ]; then
             cmd_infer="$cmd_infer --use_constraint"
             if [ "$USE_REF_RTTM" = "true" ] && [ -n "$ref_rttms" ] && [ -d "$ref_rttms" ] ; then
