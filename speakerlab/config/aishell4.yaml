@@ -1,0 +1,16 @@
+aishell4:
+  train:
+    - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/train_L/wav_no_overlap
+    - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/train_L/wav.txt
+    - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/train_L/TextGrid_no_overlap
+    - threshold: 0.86
+  eval:
+    - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/wav_no_overlap
+    - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/wav_list.txt
+    - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/TextGrid_no_overlap
+    - threshold: 0.86
+  test:
+    - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/wav_no_overlap
+    - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/wav_list.txt
+    - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/TextGrid_no_overlap
+    - threshold: 0.86
