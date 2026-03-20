@@ -8,15 +8,26 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 class AttentionConstraintPropagation(nn.Module):
-    def __init__(self, emb_dim, max_iter=20, tol=1e-5):
+    """
+    Reverts to the classic E2CP algorithm (closed-form propagation) to retain 
+    the original logical structure, but introduce an MLP-based dynamic 
+    adjustment specifically on the inversion matrix (inv_mat).
+    """
+    def __init__(self, emb_dim=192, max_iter=20, tol=1e-5, alpha=0.8):
         super(AttentionConstraintPropagation, self).__init__()
-        # W_a in the formula: weights for concatenated feature vectors
-        self.Wa = nn.Linear(emb_dim * 2, 1, bias=False)
-        # Learnable spatial perception time decay hyperparameters
-        self.beta = nn.Parameter(torch.tensor(1.0))
-        self.gamma = nn.Parameter(torch.tensor(1.0))
-        self.max_iter = max_iter
-        self.tol = tol
+        # 将 alpha 注册为可学习参数，并使用 inverse-sigmoid (logit) 初始化
+        # 在 forward 中通过 sigmoid 将其约束在 (0, 1) 内，以保证传播矩阵的稳定性
+        self.raw_alpha = nn.Parameter(torch.log(torch.tensor(alpha / (1.0 - alpha))))
+        
+        # We learn how to adjust inv_mat components (which correspond to graph edge diffusions) 
+        # using the original embeddings' feature spaces. We map from 2*D (pair of embeddings)
+        # to a single scalar multiplier value acting as a graph scaling mask.
+        self.adj_mlp = nn.Sequential(
+            nn.Linear(emb_dim * 2, emb_dim),
+            nn.ReLU(),
+            nn.Linear(emb_dim, 1),
+            nn.Sigmoid() # Scale outputs between 0 and 1 (or change to Tanh/Softplus as needed)
+        )
 
     def forward(self, embeddings, Z):
         """
@@ -24,54 +35,87 @@ class AttentionConstraintPropagation(nn.Module):
         Z: Tensor of shape (N, N) - Initial predicted constraints (+1/0/-1)
         """
         N, D = embeddings.shape
+        C = (Z != 0).to(embeddings.dtype)
         
-        # Generate normalized segment index t evenly spaced in [0, 1]
-        t = torch.linspace(0, 1, steps=N, dtype=embeddings.dtype, device=embeddings.device).unsqueeze(1)
+        # 验证并修正 C 为正定矩阵
+        # 如果有小于等于0的特征值，通过给对角线增加一个自适应的偏移量使其变成正定矩阵（代价最小的平移做法）
+        eigenvalues = torch.linalg.eigvalsh(C)
+        min_eig = torch.min(eigenvalues)
+        if min_eig <= 0:
+            epsilon = 1
+            shift = -min_eig + epsilon
+            # 仅在对角线上以最小的代价将其补为正定矩阵
+            C = C + shift * torch.eye(N, dtype=embeddings.dtype, device=embeddings.device)
+            # print(f"C is not PD. Shifted diagonal by {shift.item():.6f} to make it positive definite.")
         
-        # Original: time_penalty = beta * exp(-gamma * |t_i - t_j|) (closer = larger weight)
-        # New requirement: time_penalty = beta * (1 - exp(-gamma * |t_i - t_j|)) (closer = smaller weight)
-        # The smaller the distance |t_i - t_j|, the larger the exp(...) term, and the smaller (1 - exp(...)) becomes.
-        # This penalizes temporally adjacent segments, allocating them less attention base weight.
-        t_dist = torch.abs(t - t.T)
-        time_penalty = self.beta * (1.0 - torch.exp(-self.gamma * t_dist))
+        # 1. Base Similarity W: Cosine similarity normalized to [0, 1]
+        embeddings_norm = F.normalize(embeddings, p=2, dim=-1)
+        W = (torch.mm(embeddings_norm, embeddings_norm.T) + 1.0) / 2.0
         
-        # Optimize memory usage by broadcasting during linear projection 
-        # instead of explicitly creating large (N, N, 2*D) concat tensors.
-        # Let W_a = [W_a1, W_a2]
-        # W_a(e_i || e_j) = W_a1(e_i) + W_a2(e_j)
-        # where W_a1 and W_a2 are the first and second halves of W_a weights
-        W_a1 = self.Wa.weight[:, :D]
-        W_a2 = self.Wa.weight[:, D:]
-        
-        score_i = F.linear(embeddings, W_a1)  # (N, 1)
-        score_j = F.linear(embeddings, W_a2)  # (N, 1)
-        
-        attn_base = score_i + score_j.T  # (N, N) via broadcasting
-        
-        # c_ij = LeakyReLU(Wa[e_i || e_j] + beta * exp(-gamma |t_i - t_j|))
-        c = F.leaky_relu(attn_base + time_penalty)
-        
-        # Softmax normalization for attention weights A_ij within neighborhoods
-        # Here we apply it over the sequence (axis=-1)
-        A = F.softmax(c, dim=-1)
-        
-        # Iterative Solver for Attention Constraint Propagation
-        # F^{(t+1)} = A @ F^{(t)} @ A^T + (I - A) @ Z @ (I - A)^T
-        F_mat = Z.clone()
+        # 2. E2CP Step 1: Compute normalized Laplacian L_bar
+        d = torch.sum(W, dim=1)
+        d = torch.clamp(d, min=1e-8)
+        d_inv_sqrt = torch.pow(d, -0.5)
+        D_inv_sqrt = torch.diag(d_inv_sqrt)
+
         I = torch.eye(N, dtype=embeddings.dtype, device=embeddings.device)
+        L_bar = C - I + D_inv_sqrt @ W @ D_inv_sqrt
         
-        I_A = I - A
-        constant_term = I_A @ Z @ I_A.transpose(0, 1)
+        # 实时计算当前受约束的 alpha
+        alpha = torch.sigmoid(self.raw_alpha)
         
-        for _ in range(self.max_iter):
-            F_next = A @ F_mat @ A.transpose(0, 1) + constant_term
-            # Check for convergence
-            if torch.norm(F_next - F_mat, p='fro') < self.tol:
-                F_mat = F_next
-                break
-            F_mat = F_next
+        # 3. E2CP Step 2: Optimal Closed-form propagation
+        inv_mat = torch.linalg.inv(C - alpha * L_bar)
+        
+        # 4. Adjustment of `inv_mat`: 
+        # Since inv_mat is an NxN transition matrix indicating how much constraint 
+        # flows from chunk i to chunk j, we predict a continuous element-wise adjustment 
+        # mask M (NxN) based on the features of chunk i and chunk j.
+        # We process this dynamically using OOM-safe batching in inference to prevent 
+        # large explicit (N, N, emb_dim) explicit tensor caching.
+        
+        # Free up memory locally
+        W1 = self.adj_mlp[0].weight[:, :D] # (emb_dim, D)
+        W2 = self.adj_mlp[0].weight[:, D:] # (emb_dim, D)
+        bias1 = self.adj_mlp[0].bias # (emb_dim)
+        
+        proj_i = F.linear(embeddings, W1) # (N, emb_dim)
+        proj_j = F.linear(embeddings, W2) # (N, emb_dim)
+        
+        # Calculate final layer ahead of time
+        W_last = self.adj_mlp[2].weight # (1, emb_dim)
+        bias_last = self.adj_mlp[2].bias
+        
+        # Calculate mask memory-efficiently (vectorized loop or direct chunking)
+        # Using a highly-efficient low-memory formulation:
+        # Instead of `ReLU(A + B) @ W`, we can perform computations iteratively along rows if needed.
+        # But we can also refactor MLP logic into something completely memory efficient:
+        # We need sum_k [ ReLU(proj_i[:, k].unsqueeze(1) + proj_j[:, k].unsqueeze(0) + bias1[k]) * W_last[0, k] ]
+        
+        adj_mask_rows = []
+        # Chunk row computations to save memory footprint
+        chunk_size = 200
+        for i_start in range(0, N, chunk_size):
+            i_end = min(N, i_start + chunk_size)
             
-        return F_mat
+            # (chunk_N, 1, emb_dim) + (1, N, emb_dim) -> (chunk_N, N, emb_dim)
+            combined_chunk = proj_i[i_start:i_end].unsqueeze(1) + proj_j.unsqueeze(0) + bias1
+            combined_chunk = F.relu(combined_chunk)
+            
+            # -> (chunk_N, N)
+            mask_chunk_raw = torch.matmul(combined_chunk, W_last.T).squeeze(-1) + bias_last
+            adj_mask_rows.append(mask_chunk_raw)
+            
+        adj_mask = torch.cat(adj_mask_rows, dim=0) # (N, N)
+        adj_mask = torch.sigmoid(adj_mask) 
+        
+        # Apply adjustment. We can scale the global inverted transition paths
+        inv_mat_adj = inv_mat * adj_mask
+        
+        # Formula: F* = (1-alpha)^2 * (I - alpha*L_bar)^-1 @ Z @ (I - alpha*L_bar)^-1
+        F_star = ((1.0 - alpha)**2) * (inv_mat_adj @ (C*Z) @ inv_mat_adj)
+        
+        return F_star
 
 class ConstraintDataset(Dataset):
     def __init__(self, data_list):
@@ -112,12 +156,12 @@ def train(model, dataloader, optimizer, criterion, device, epochs):
                 
                 # Apply MSE Loss. We only calculate loss where Z_gt is available (e.g. != 0)
                 # You can customize valid_mask depending on whether predicting 0s is part of training.
-                valid_mask = (Z_gt != 0).float()
+                valid_mask = (Z_gt != 0)
                 # To prevent empty graph crash:
                 if valid_mask.sum() == 0:
                     continue
                     
-                loss = criterion(F_star * valid_mask, Z_gt * valid_mask)
+                loss = criterion(F_star[valid_mask], Z_gt[valid_mask])
                 batch_loss += loss
             
             if isinstance(batch_loss, float):

@@ -1,26 +1,26 @@
-# aishell4:
-#   - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav_no_overlap
-#   - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/wav_list_no_overlap.txt
-#   - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/TextGrid_no_overlap
-#   - threshold: 0.86
+aishell4:
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/wav_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/wav_list.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell4/test/TextGrid_no_overlap
+  - threshold: 0.86
 
-# voxconverse:
-#   - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/voxconverse_test_wav_no_overlap
-#   - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/wav_list_lowest_confusion_50.txt
-#   - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/test_no_overlap
-#   - threshold: 0.96
+voxconverse:
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/voxconverse_test_wav_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/wav_list_lowest_confusion_50.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/voxconverse/test_no_overlap
+  - threshold: 0.96
 
-# ami:
-#   - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/ami/audios_no_overlap
-#   - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/ami/wav_list_no_overlap.txt
-#   - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/ami/rttm_no_overlap
-#   - threshold: 0.87
+ami:
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/ami/audios_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/ami/wav_list_no_overlap.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/ami/rttm_no_overlap
+  - threshold: 0.87
 
-# aishell5:
-#   - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/all_audio_no_overlap
-#   - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/wav_list_filtered.txt
-#   - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/all_rttm_no_overlap
-#   - threshold: 0.96
+aishell5:
+  - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/all_audio_no_overlap
+  - wav_list: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/wav_list_filtered.txt
+  - ref_rttms: /home/yukaichen/work/.sub-repos/diarization/data/aishell5/all_rttm_no_overlap
+  - threshold: 0.96
 
 ali_meeting:
   - wav_dir: /home/yukaichen/work/.sub-repos/diarization/data/Ali_meeting/Test_Ali/Test_Ali_far/audio_dir

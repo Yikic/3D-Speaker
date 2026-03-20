@@ -3,6 +3,7 @@
 
 import numpy as np
 import scipy
+import time
 import sklearn
 from sklearn.cluster._kmeans import k_means
 from sklearn.metrics.pairwise import cosine_similarity
@@ -31,6 +32,7 @@ class SpectralCluster:
         self.min_pnum = min_pnum
         self.pval = pval
         self.k = oracle_num
+        self.e2cp_times = []
 
     def __call__(self, X, **kwargs):
         pval = kwargs.get('pval', None)
@@ -51,7 +53,9 @@ class SpectralCluster:
         if constraint_matrix is not None:
             # self.visualize_heatmap(constraint_matrix, save_path="results/constraint_mat_before.png", title="Constraint Matrix Before Propagation")
             # self.visualize_heatmap(sym_prund_sim_mat, save_path="results/sim_mat.png", title="Similarity Matrix After Pruning")
-            optim_constraint_matrix = self.e2cp_propagation(sym_prund_sim_mat, constraint_matrix, alpha=alpha)
+            t0 = time.time()
+            optim_constraint_matrix = self.e2cp_propagation(sym_prund_sim_mat, constraint_matrix, alpha=alpha, method="cholesky")
+            self.e2cp_times.append(time.time() - t0)
             # self.visualize_heatmap(optim_constraint_matrix, save_path="results/constraint_mat_after.png", title="Constraint Matrix After Propagation")
             optim_sim_mat = self.adjust_similarity_matrix(sym_prund_sim_mat, optim_constraint_matrix)
         else:
@@ -76,7 +80,7 @@ class SpectralCluster:
         W: np.ndarray, 相似度矩阵 (N x N)
         Z: np.ndarray, 初始约束矩阵 (N x N), +1代表Must-link, -1代表Cannot-link
         alpha: float, 传播参数 (0 < alpha < 1)
-        method: str, 'closed_form' (直接求逆) 或 'iterative' (迭代传播)
+        method: str, 'closed_form' (直接求逆) 或 'iterative' (迭代传播) 或 'sparse' (稀疏求解) 或 'cholesky' (稠密Cholesky求解)
         max_iter: int, 迭代模式下的最大迭代次数
         tol: float, 迭代收敛阈值
         
@@ -85,24 +89,56 @@ class SpectralCluster:
         """
         N = W.shape[0]
         
-        # 1. 计算归一化矩阵 L_bar (论文中定义为 D^-1/2 * W * D^-1/2) [cite: 586]
+        # 1. 计算归一化矩阵 L_bar (论文中定义为 D^-1/2 * W * D^-1/2) 
         d = np.sum(W, axis=1)
         d_inv_sqrt = np.power(d, -0.5, where=d > 0)
         D_inv_sqrt = np.diag(d_inv_sqrt)
         L_bar = D_inv_sqrt @ W @ D_inv_sqrt
         
         I = np.eye(N)
+        A = I - alpha * L_bar
         
         if method == 'closed_form':
-            # --- 方式 A: 闭式解 (Closed-form Solution) ---
-            # 公式: F* = (1-alpha)^2 * (I - alpha*L_bar)^-1 * Z * (I - alpha*L_bar)^-1 
-            inv_mat = np.linalg.inv(I - alpha * L_bar)
+            # 原始实现：直接求逆 (最慢)
+            inv_mat = np.linalg.inv(A)
             F_star = (1 - alpha)**2 * (inv_mat @ Z @ inv_mat)
             return F_star
 
+        elif method == 'cholesky':
+            # 优化实现 1：使用 Cholesky 分解 (稠密矩阵最优解)
+            # 确保矩阵完全对称并在对角线上增加极小的扰动（jitter），防止由于浮点数精度导致的非正定报错
+            A_sym = (A + A.T) / 2
+            c, lower = scipy.linalg.cho_factor(A_sym + np.eye(N) * 1e-5)
+            # 求解 A * X = Z  -> X = A^-1 * Z
+            X = scipy.linalg.cho_solve((c, lower), Z)
+            # 求解 A * Y = X^T -> Y = A^-1 * Z * A^-1
+            Y = scipy.linalg.cho_solve((c, lower), X.T)
+                
+            F_star = (1 - alpha)**2 * Y
+            return F_star
+            
+        elif method == 'sparse':
+            # 优化实现 2：当 N 非常大时使用稀疏矩阵运算
+            import scipy.sparse as sp
+            import scipy.sparse.linalg as splinalg
+            
+            # 将 L_bar 和 Z 转换为稀疏矩阵
+            A_sparse = sp.csc_matrix(A)
+            Z_sparse = sp.csc_matrix(Z)
+            
+            # 使用超级节点 LU 分解加速
+            solve = splinalg.factorized(A_sparse)
+            
+            # A * X = Z
+            X = solve(Z_sparse.toarray())
+            # A * Y = X^T
+            Y = solve(X.T)
+            
+            F_star = (1 - alpha)**2 * Y
+            return F_star
+
         elif method == 'iterative':
-            # --- 方式 B: 迭代法 (Efficient Iterative Method) ---
-            # 第一步：垂直传播 (Vertical Propagation) 
+            # 迭代法保持不变
             Fv = Z.copy()
             for i in range(max_iter):
                 Fv_next = alpha * (L_bar @ Fv) + (1 - alpha) * Z
@@ -111,10 +147,8 @@ class SpectralCluster:
                     break
                 Fv = Fv_next
                 
-            # 第二步：水平传播 (Horizontal Propagation) 
             Fh = Fv.copy()
             for i in range(max_iter):
-                # 注意：水平传播是在右侧乘以 L_bar 
                 Fh_next = alpha * (Fh @ L_bar) + (1 - alpha) * Fv
                 if np.linalg.norm(Fh_next - Fh, ord='fro') < tol:
                     Fh = Fh_next
@@ -124,7 +158,7 @@ class SpectralCluster:
             return Fh
         
         else:
-            raise ValueError("Method must be 'closed_form' or 'iterative'")
+            raise ValueError("Method must be 'closed_form', 'cholesky', 'sparse', or 'iterative'")
 
     def adjust_similarity_matrix(self, W, F_star):
         """

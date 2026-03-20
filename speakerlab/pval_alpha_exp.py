@@ -211,6 +211,14 @@ def main():
         best_a = alphas[best_idx[1]]
         print(f"Optimal for {ds_name}: pval={best_p:.4f}, alpha={best_a:.4f} with Speaker Confusion={conf_rate[best_idx]:.4f}")
         
+        # 打印一下整体的平均约束传播耗时
+        if hasattr(pipeline.cluster, 'cluster') and hasattr(pipeline.cluster.cluster, 'e2cp_times'):
+            times = pipeline.cluster.cluster.e2cp_times
+            if times:
+                avg_time = sum(times) / len(times)
+                print(f"[Profiling] Average E2CP constraint propagation time for {ds_name}: {avg_time:.4f} seconds (Total queries: {len(times)})")
+            pipeline.cluster.cluster.e2cp_times = [] # clear for the next dataset
+            
         # Plot 3D surface
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')

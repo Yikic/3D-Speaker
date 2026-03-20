@@ -226,11 +226,13 @@ def evaluate_loss(model, dataloader, criterion, device):
                 Z_gt = item['Z_gt'].float().to(device)
                 
                 F_star = model(emb, Z_init)
-                valid_mask = (Z_gt != 0).float()
+                valid_mask = (Z_gt != 0)
                 if valid_mask.sum() == 0:
                     continue
                     
-                loss = criterion(F_star * valid_mask, Z_gt * valid_mask)
+                # 仅对存在先验约束 (Z_gt != 0) 的元素计算平均 MSE
+                # 如果把全图的0带入计算，梯度会被巨量的0严重稀释，导致网络参数无法更新
+                loss = criterion(F_star[valid_mask], Z_gt[valid_mask])
                 total_loss += loss.item()
                 count += 1
     return total_loss / max(count, 1)
@@ -327,11 +329,12 @@ def train_and_eval(model, train_loader, eval_loader, optimizer, criterion, devic
                 Z_gt = item['Z_gt'].float().to(device)
                 
                 F_star = model(emb, Z_init)
-                valid_mask = (Z_gt != 0).float()
+                valid_mask = (Z_gt != 0)
                 if valid_mask.sum() == 0:
                     continue
                     
-                loss = criterion(F_star * valid_mask, Z_gt * valid_mask)
+                # 计算损失，必须只在 valid_mask 为 True 的元素上计算
+                loss = criterion(F_star[valid_mask], Z_gt[valid_mask])
                 batch_loss += loss
                 valid_items += 1
             
